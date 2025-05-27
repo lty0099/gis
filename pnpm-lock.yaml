@@ -12,8 +12,8 @@ importers:
         specifier: ^1.7.1
         version: 1.7.1
       leaflet-draw:
-        specifier: 1.0.4
-        version: 1.0.4
+        specifier: 1.0.2
+        version: 1.0.2
       pinia:
         specifier: ^3.0.1
         version: 3.0.2(typescript@5.8.3)(vue@3.5.14(typescript@5.8.3))
@@ -1185,8 +1185,8 @@ packages:
   kolorist@1.8.0:
     resolution: {integrity: sha512-Y+60/zizpJ3HRH8DCss+q95yr6145JXZo46OTpFvDZWLfRCE4qChOyk1b26nMaNpfHHgxagk9dXT5OP0Tfe+dQ==}
 
-  leaflet-draw@1.0.4:
-    resolution: {integrity: sha512-rsQ6saQO5ST5Aj6XRFylr5zvarWgzWnrg46zQ1MEOEIHsppdC/8hnN8qMoFvACsPvTioAuysya/TVtog15tyAQ==}
+  leaflet-draw@1.0.2:
+    resolution: {integrity: sha512-iCcbXE9okhwznoTXjxVjoGFoKeiWGsgmWPKrPAeHUvtWZWK4t6YF6815D13wZoMxX2UM6tOmD7/VofCxx3S0+w==}
 
   leaflet@1.7.1:
     resolution: {integrity: sha512-/xwPEBidtg69Q3HlqPdU3DnrXQOvQU/CCHA1tcDQVzOwm91YMYaILjNp7L4Eaw5Z4sOYdbBz6koWyibppd8Zqw==}
@@ -2752,7 +2752,7 @@ snapshots:
 
   kolorist@1.8.0: {}
 
-  leaflet-draw@1.0.4: {}
+  leaflet-draw@1.0.2: {}
 
   leaflet@1.7.1: {}
 
