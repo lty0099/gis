@@ -1,0 +1,35 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [118.78, 32.04] 
+      },
+      "properties": {
+        "name": "Nanjing"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [114.07, 22.54]
+      },
+      "properties": {
+        "name": "Shenzhen"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [104.06, 30.67]
+      },
+      "properties": {
+        "name": "Chengdu"
+      }
+    }
+  ]
+}
