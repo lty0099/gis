@@ -130,24 +130,25 @@ const loadOverlayLayers = async () => {
   if (!olMap) return;
 
   // Defensive checks and cleanup for existing overlay layers
-  if (mapOverlayLayers.value && typeof mapOverlayLayers.value.forEach === 'function' && typeof mapOverlayLayers.value.clear === 'function') {
-    // It appears to be a Map-like object, proceed with cleanup
+  // Use `instanceof Map` for a more reliable check with Vue's reactive proxies
+  if (mapOverlayLayers.value instanceof Map) {
+    // It is a Map (or a Proxy of a Map that passes instanceof check), proceed with cleanup
     mapOverlayLayers.value.forEach(layer => {
       if (olMap && typeof olMap.getLayers === 'function' && olMap.getLayers().getArray().includes(layer)) { 
         olMap.removeLayer(layer);
       }
     });
     mapOverlayLayers.value.clear();
-    Logger.debug('[GisMap.vue] Cleared existing overlay layers from map and local cache.');
+    Logger.debug('[GisMap.vue] Cleared existing overlay layers from map and local cache (using instanceof check).');
   } else if (mapOverlayLayers.value) {
-    // It exists, but it's not what we expect (not a Map)
-    Logger.error(`[GisMap.vue] loadOverlayLayers: mapOverlayLayers.value is not a Map object as expected. Type: ${typeof mapOverlayLayers.value}. Value:`, mapOverlayLayers.value);
+    // It exists, but it's not an instance of Map
+    Logger.error(`[GisMap.vue] loadOverlayLayers: mapOverlayLayers.value is not an instance of Map. Type: ${typeof mapOverlayLayers.value}. Value:`, mapOverlayLayers.value);
     // Reset it to ensure subsequent .set operations don't fail.
     mapOverlayLayers.value = new Map(); 
-    Logger.warn('[GisMap.vue] loadOverlayLayers: Reset mapOverlayLayers.value to a new Map due to unexpected type.');
+    Logger.warn('[GisMap.vue] loadOverlayLayers: Reset mapOverlayLayers.value to a new Map due to failed instanceof Map check.');
   } else {
-    // mapOverlayLayers.value is null or undefined, which is unexpected after initialization.
-    Logger.warn('[GisMap.vue] loadOverlayLayers: mapOverlayLayers.value is null or undefined. Initializing as new Map.');
+    // mapOverlayLayers.value is null or undefined
+    Logger.warn('[GisMap.vue] loadOverlayLayers: mapOverlayLayers.value is null or undefined. Initializing as new Map (instanceof check path).');
     mapOverlayLayers.value = new Map();
   }
   // Note: overlayVisibilityState is intentionally not cleared to maintain user preferences across reloads.
@@ -388,8 +389,8 @@ onBeforeUnmount(() => {
     olMap = null;
     // Clear reactive refs
     mapBaseLayers.value = [];
-    mapOverlayLayers.value.clear(); // Requires mapOverlayLayers.value to be a Map
-    overlayVisibilityState.value.clear(); // Also a Map
+    if (mapOverlayLayers.value instanceof Map) mapOverlayLayers.value.clear(); // Check before clearing
+    if (overlayVisibilityState.value instanceof Map) overlayVisibilityState.value.clear(); // Check before clearing
     Logger.info('OpenLayers map disposed');
   }
 });
