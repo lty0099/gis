@@ -1,63 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest'
-import { mount } from '@vue/test-utils' // Using @vue/test-utils for component testing
-import GisMap from '../GisMap.vue' // Adjust path as needed
-import { nextTick, ref } from 'vue'
-import { Logger } from '@/utils/logger' // Assuming logger is mockable or simple
-
-// Mock Leaflet and leaflet-draw
-const mockMapInstance = {
-  setView: vi.fn(),
-  addLayer: vi.fn(),
-  removeLayer: vi.fn(),
-  on: vi.fn(),
-  remove: vi.fn(),
-  hasLayer: vi.fn().mockReturnValue(true), // Assume layers are on map once added for simplicity
-  removeControl: vi.fn(),
-};
-const mockTileLayerInstance = { addTo: vi.fn() };
-const mockGeoJSONInstance = { 
-  addTo: vi.fn(), 
-  clearLayers: vi.fn().mockReturnThis(), 
-  addData: vi.fn().mockReturnThis(),
-};
-const mockFeatureGroupInstance = { 
-  addTo: vi.fn(), 
-  clearLayers: vi.fn(), 
-  addLayer: vi.fn() 
-};
-const mockLayersControlInstance = { addTo: vi.fn(), removeLayer: vi.fn(), addOverlay: vi.fn() }; // Added addOverlay
-const mockDrawRectangleInstance = { enable: vi.fn() };
-
-vi.mock('leaflet', () => ({
-  default: {
-    map: vi.fn(() => mockMapInstance),
-    tileLayer: vi.fn(() => mockTileLayerInstance),
-    geoJSON: vi.fn(() => mockGeoJSONInstance),
-    featureGroup: vi.fn(() => mockFeatureGroupInstance),
-    control: {
-      layers: vi.fn(() => mockLayersControlInstance),
-    },
-    latLngBounds: vi.fn((latlng1, latlng2) => ({
-        // Mock bounds methods if needed by the component itself
-        contains: vi.fn().mockImplementation((latLng) => {
-            // Simple mock: contains if lat is between southWest.lat and northEast.lat
-            // This is a very basic mock, real bounds logic is complex.
-            // For testing filterGeoJsonByBounds, the mock passed to it matters more.
-            if (!latlng1 || !latlng2) return false; // Should not happen with valid bounds
-            return latLng.lat >= latlng1.lat && latLng.lat <= latlng2.lat;
-        }),
-        getNorthEast: vi.fn(() => latlng2 || {lat: 0, lng: 0}),
-        getSouthWest: vi.fn(() => latlng1 || {lat: 0, lng: 0}),
-    })),
-    latLng: vi.fn((lat, lng) => ({ lat, lng })), // Required by bounds.contains
-    Draw: { // For leaflet-draw
-        Rectangle: vi.fn(() => mockDrawRectangleInstance),
-        Event: {
-            CREATED: 'draw:created'
-        }
-    }
-  },
-}));
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mount } from '@vue/test-utils';
+import GisMap from '../GisMap.vue';
+import { nextTick, ref } from 'vue';
+import { Logger } from '@/utils/logger';
 
 // Mock Logger
 vi.mock('@/utils/logger', () => ({
@@ -68,260 +13,357 @@ vi.mock('@/utils/logger', () => ({
   },
 }));
 
-describe('GisMap.vue', () => {
+// Mock OpenLayers modules
+const mockMapView = {
+  animate: vi.fn(),
+  getProjection: vi.fn(() => ({ getCode: () => 'EPSG:3857' })),
+  setCenter: vi.fn(),
+  setZoom: vi.fn(),
+  getCenter: vi.fn(() => [0,0]), // Return a default center
+  getZoom: vi.fn(() => 2),    // Return a default zoom
+};
+const mockMapInstance = {
+  addLayer: vi.fn(),
+  removeLayer: vi.fn(),
+  addInteraction: vi.fn(),
+  removeInteraction: vi.fn(),
+  addOverlay: vi.fn(),
+  on: vi.fn(),
+  un: vi.fn(), // For unregistering events
+  setTarget: vi.fn(),
+  getView: vi.fn(() => mockMapView),
+  getLayers: vi.fn(() => ({ getArray: () => [] })), // Mock layer collection
+  forEachFeatureAtPixel: vi.fn(),
+  getInteractions: vi.fn(() => ({ getArray: () => [] })), // Mock interactions collection
+};
+const mockTileLayerInstance = { setVisible: vi.fn(), get: vi.fn(), set: vi.fn() };
+const mockVectorLayerInstance = { setVisible: vi.fn(), get: vi.fn(), set: vi.fn(), getSource: vi.fn() };
+const mockVectorSourceInstance = { addFeatures: vi.fn(), clear: vi.fn(), getFeatures: vi.fn(() => []), changed: vi.fn() };
+const mockOverlayInstance = { setPosition: vi.fn() };
+const mockDrawInstance = { on: vi.fn(), un: vi.fn() }; // For Draw interaction events
+
+vi.mock('ol/Map', () => ({ default: vi.fn(() => mockMapInstance) }));
+vi.mock('ol/View', () => ({ default: vi.fn(() => mockMapView) }));
+vi.mock('ol/layer/Tile', () => ({ default: vi.fn(() => mockTileLayerInstance) }));
+vi.mock('ol/layer/Vector', () => ({ default: vi.fn(() => mockVectorLayerInstance) }));
+vi.mock('ol/source/Vector', () => ({ default: vi.fn(() => mockVectorSourceInstance) }));
+vi.mock('ol/source/OSM', () => ({ default: vi.fn() }));
+vi.mock('ol/source/XYZ', () => ({ default: vi.fn() }));
+vi.mock('ol/format/GeoJSON', () => ({ default: vi.fn(() => ({ readFeatures: vi.fn(data => data.features || []) })) }));
+vi.mock('ol/Overlay', () => ({ default: vi.fn(() => mockOverlayInstance) }));
+vi.mock('ol/interaction/Draw', () => ({ default: vi.fn(() => mockDrawInstance) }));
+vi.mock('ol/proj', () => ({
+  fromLonLat: vi.fn(coords => coords), // Passthrough
+  toLonLat: vi.fn(coords => coords),   // Passthrough
+  transformExtent: vi.fn(extent => extent), // Passthrough
+  transform: vi.fn(coordinate => coordinate), // Passthrough for center
+}));
+vi.mock('ol/sphere', () => ({ getArea: vi.fn(() => 12345) })); // Mock area calculation
+vi.mock('ol/extent', () => ({
+  getCenter: vi.fn(extent => [(extent[0] + extent[2]) / 2, (extent[1] + extent[3]) / 2]),
+  containsCoordinate: vi.fn(), // Mock if needed for filtering logic tests
+}));
+
+// Mock global fetch
+global.fetch = vi.fn();
+
+
+describe('GisMap.vue with OpenLayers', () => {
   let wrapper;
 
-  const initialProps = {
-    center: [0, 0],
-    zoom: 2,
-    layers: [],
+  const defaultProps = {
+    center: [116.4, 39.9],
+    zoom: 10,
+    overlayLayersConfig: [],
   };
-  
-  // Helper to mount the component
+
   const mountComponent = (props = {}) => {
     return mount(GisMap, {
-      props: { ...initialProps, ...props },
-      // If you need to mock $refs for mapContainer:
-      slots: { default: '<div style="height: 500px"></div>' }, // Mock template for map container
-      attachTo: document.body, // Necessary if Leaflet tries to access document properties
+      props: { ...defaultProps, ...props },
+      global: {
+        stubs: { // Stub child components if any, not strictly needed here
+          // 'another-component': true 
+        }
+      },
+      slots: { // Provide mock slots for ref="mapContainer" and ref="popupContainer"
+        default: `
+          <div ref="mapContainer" style="width: 500px; height: 500px;"></div>
+          <div ref="popupContainer">
+            <a href="#" ref="popupCloser"></a>
+            <div id="popup-content"></div>
+          </div>
+        `
+      },
+      attachTo: document.body, // Ensure component is attached to DOM for OpenLayers target
     });
   };
 
   beforeEach(() => {
-    vi.clearAllMocks(); // Clear all mocks before each test
-    // Mock mapContainer.value before component is mounted
-    // GisMap.vue uses `ref="mapContainer"`. Vue Test Utils handles this if DOM is available.
+    vi.clearAllMocks();
+    // Reset fetch mock for each test
+    global.fetch.mockReset(); 
+    // Default fetch mock
+    global.fetch.mockResolvedValue({ 
+        ok: true, 
+        json: async () => ({ type: 'FeatureCollection', features: [] }) 
+    });
   });
 
   afterEach(() => {
     if (wrapper) {
-      wrapper.unmount(); // Unmount the component to trigger onBeforeUnmount
+      wrapper.unmount();
     }
   });
 
-  it('initializes map on mount', async () => {
+  it('initializes OpenLayers map on mount', async () => {
     wrapper = mountComponent();
-    await nextTick(); // Wait for onMounted
+    await nextTick(); // Wait for onMounted and any async operations within
+
+    expect(Map).toHaveBeenCalledTimes(1);
+    expect(mockMapInstance.setTarget).toHaveBeenCalled(); // OL map is targeted to the div
+    expect(View).toHaveBeenCalledTimes(1);
+    expect(mockMapView.setCenter).not.toHaveBeenCalled(); // Center is set in constructor
+    expect(mockMapView.setZoom).not.toHaveBeenCalled();   // Zoom is set in constructor
+    expect(fromLonLat).toHaveBeenCalledWith(defaultProps.center);
     
-    expect(L.map).toHaveBeenCalled();
-    expect(mockMapInstance.setView).toHaveBeenCalledWith([0,0], 2);
-    expect(L.tileLayer).toHaveBeenCalledTimes(2); // OSM and ESRI
-    expect(mockTileLayerInstance.addTo).toHaveBeenCalledTimes(3); // 2 base + 1 initial OSM
-    expect(L.control.layers).toHaveBeenCalled();
-    expect(mockLayersControlInstance.addTo).toHaveBeenCalledWith(mockMapInstance);
-    expect(L.featureGroup).toHaveBeenCalled(); // drawLayer
-    expect(mockFeatureGroupInstance.addTo).toHaveBeenCalledWith(mockMapInstance); // drawLayer added to map
-    expect(Logger.info).toHaveBeenCalledWith('Map initialized');
+    // Base layers (OSM and ESRI)
+    expect(TileLayer).toHaveBeenCalledTimes(2);
+    expect(OSM).toHaveBeenCalledTimes(1);
+    expect(XYZ).toHaveBeenCalledTimes(1);
+    expect(mockMapInstance.addLayer).toHaveBeenCalledTimes(2 + 1); // 2 base + 1 drawLayer
+    expect(Logger.info).toHaveBeenCalledWith('OpenLayers map initialized.'); // Updated log message
   });
 
-  describe('Layer Initialization (setupLayers)', () => {
-    const sampleLayers = [
-      { id: 'layer1', name: 'Layer One', data: { type: 'FeatureCollection', features: [] }, visible: true },
-      { id: 'layer2', name: 'Layer Two', data: { type: 'FeatureCollection', features: [] }, visible: false },
-      { id: 'layer3', name: 'Layer Three (Default Vis)', data: { type: 'FeatureCollection', features: [] } },
+  it('switches base layers correctly', async () => {
+    wrapper = mountComponent();
+    await nextTick();
+    
+    const esriButton = wrapper.findAll('.toolbar button').find(b => b.text().includes('ESRI'));
+    expect(esriButton).toBeDefined();
+
+    // Mock the get method on TileLayer instances
+    // This is tricky because the same mockTileLayerInstance is returned by vi.mock
+    // We need to ensure our mapBaseLayers ref in the component gets distinct mocks
+    // For now, assume setVisible is called correctly.
+    
+    await esriButton.trigger('click');
+    await nextTick();
+    
+    // Check that setVisible was called on the layer instances stored in mapBaseLayers
+    // This requires deeper mocking or inspecting component's internal state if possible
+    // For now, we check the currentBaseLayerId ref (if exposed or by effect)
+    // The component's internal mapBaseLayers.value[0] (OSM) should be invisible
+    // and mapBaseLayers.value[1] (ESRI) should be visible.
+    // This test is simplified due to mock complexities.
+    expect(Logger.info).toHaveBeenCalledWith('Switched base layer to: esriWorldImagery');
+  });
+
+  it('loads overlay layers from props', async () => {
+    const overlayConfig = [
+      { id: 'testOverlay1', name: 'Test GeoJSON', geoJson: { type: 'FeatureCollection', features: [{type: 'Feature', geometry: {type: 'Point', coordinates:[0,0]}, properties: {name: 'p1'}}] }, visible: true, style: {}, popup: vi.fn() },
+      { id: 'testOverlay2', name: 'Test URL', dataUrl: '/data/test.geojson', visible: true, style: {}, popup: vi.fn() },
     ];
+    global.fetch.mockResolvedValue({ ok: true, json: async () => ({ type: 'FeatureCollection', features: [] }) });
 
-    it('loads layers from props and adds visible ones to map and control', async () => {
-      wrapper = mountComponent({ layers: sampleLayers });
-      await nextTick(); // For onMounted then watcher
+    wrapper = mountComponent({ overlayLayersConfig: overlayConfig });
+    await nextTick(); // For onMounted
+    await nextTick(); // For async loadOverlayLayers
 
-      expect(L.geoJSON).toHaveBeenCalledTimes(sampleLayers.length);
-      
-      // activeGeoJsonLayers population and rawGeoJsonDataMap (internal state, harder to test directly without exposing)
-      // We test by effects: addTo map and control
-
-      // Layer One (visible: true)
-      expect(mockGeoJSONInstance.addTo).toHaveBeenCalledWith(mockMapInstance); // Called for layer1 & layer3
-      
-      // Layer Two (visible: false) - check that it was NOT added for layer2 specifically
-      // This is tricky because mockGeoJSONInstance is a single mock.
-      // Instead, verify calls to layersControl.addOverlay
-      expect(mockLayersControlInstance.addOverlay).not.toHaveBeenCalled(); // addOverlay is not used in the current setupLayers, layers are passed in constructor
-
-      // Verify L.control.layers was called with the correct overlay group.
-      // The mock for L.control.layers needs to capture its arguments or be more sophisticated
-      // For now, we check that setupLayers completes and calls log
-      expect(Logger.info).toHaveBeenCalledWith('Layers control updated.');
-      
-      // Check layers added to map. The mockGeoJSONInstance.addTo is a global mock.
-      // The current setupLayers calls geoJsonLayer.addTo(map)
-      // Layer 1: visible: true -> .addTo(map)
-      // Layer 2: visible: false -> not .addTo(map)
-      // Layer 3: visible: undefined (defaults to true) -> .addTo(map)
-      // So, mockGeoJSONInstance.addTo should be called twice for these layers.
-      // Plus base layers. This check needs refinement due to shared mock.
-      // A better way is to check map.addLayer for specific layer instances if mocks allow.
-      // Given current mocks, this is hard to assert precisely for individual layers.
-      // We can count calls to L.geoJSON and assume internal logic based on code review.
-      expect(L.geoJSON).toHaveBeenNthCalledWith(1, sampleLayers[0].data, undefined);
-      expect(L.geoJSON).toHaveBeenNthCalledWith(2, sampleLayers[1].data, undefined);
-      expect(L.geoJSON).toHaveBeenNthCalledWith(3, sampleLayers[2].data, undefined);
-
-      // Based on current GisMap.vue, setupLayers removes old control and adds new.
-      // The L.control.layers is called once in initMap, then again in setupLayers.
-      // The second call in setupLayers should contain the overlay layers.
-      const expectedOverlayGroup = {
-        [sampleLayers[0].name]: mockGeoJSONInstance, // Layer 1
-        [sampleLayers[1].name]: mockGeoJSONInstance, // Layer 2 (added to control, not map)
-        [sampleLayers[2].name]: mockGeoJSONInstance, // Layer 3
-      };
-      expect(L.control.layers).toHaveBeenLastCalledWith(expect.any(Object), expectedOverlayGroup);
-    });
-
-    it('updates layers when props change', async () => {
-      wrapper = mountComponent({ layers: [sampleLayers[0]] });
-      await nextTick(); // Initial setup
-      expect(L.geoJSON).toHaveBeenCalledTimes(1);
-
-      const newSampleLayers = [sampleLayers[1], sampleLayers[2]];
-      await wrapper.setProps({ layers: newSampleLayers });
-      await nextTick(); // Watcher update
-
-      expect(L.geoJSON).toHaveBeenCalledTimes(1 + newSampleLayers.length); // 1 initial + 2 new
-      expect(Logger.info).toHaveBeenCalledWith(`GeoJSON layer "${sampleLayers[1].name}" loaded.`);
-      expect(Logger.info).toHaveBeenCalledWith(`GeoJSON layer "${sampleLayers[2].name}" loaded.`);
-      expect(Logger.info).多次.toHaveBeenCalledWith('Layers control updated.');
-    });
-  });
-
-  describe('Filtering Logic (filterGeoJsonByBounds)', () => {
-    const filterableLayer = {
-      id: 'filterLayer1',
-      name: 'Filterable Layer',
-      data: {
-        type: 'FeatureCollection',
-        features: [
-          { type: 'Feature', geometry: { type: 'Point', coordinates: [1, 1] }, properties: { id: 1 } },
-          { type: 'Feature', geometry: { type: 'Point', coordinates: [10, 10] }, properties: { id: 2 } },
-        ],
-      },
-      visible: true,
-    };
-
-    beforeEach(async () => {
-        // Initialize with the filterable layer
-        wrapper = mountComponent({ layers: [filterableLayer] });
-        await nextTick(); // Mount and initial setupLayers
-        // Ensure L.geoJSON mock is reset for clearLayers/addData calls
-        mockGeoJSONInstance.clearLayers.mockClear();
-        mockGeoJSONInstance.addData.mockClear();
-    });
-    
-    it('filters features of the first layer based on bounds', async () => {
-        const mockBounds = L.latLngBounds(L.latLng(0,0), L.latLng(5,5)); // Contains only first point (1,1)
-        
-        // Manually trigger the CREATED event that calls filterGeoJsonByBounds
-        // This requires finding the on(L.Draw.Event.CREATED, callback) and calling it.
-        // Or, if we can get the component instance, call the method directly.
-        // For simplicity, let's assume we can call the method.
-        // In a real scenario, you might need to simulate the draw event.
-        
-        // Simulate the component's internal call to filterGeoJsonByBounds
-        // This is a bit of a white-box test.
-        const instance = wrapper.vm; // Get component instance
-        instance.filterGeoJsonByBounds(mockBounds); // This is not directly possible with <script setup>
-                                                   // unless filterGeoJsonByBounds is exposed.
-                                                   // For this test, let's assume it's callable or simulate the event.
-        
-        // Simulate draw event instead to trigger filterGeoJsonByBounds
-        const drawCreatedCallback = mockMapInstance.on.mock.calls.find(call => call[0] === L.Draw.Event.CREATED)[1];
-        const mockDrawnLayer = { getBounds: () => mockBounds };
-        drawCreatedCallback({ layer: mockDrawnLayer });
-        await nextTick();
-
-        expect(mockGeoJSONInstance.clearLayers).toHaveBeenCalled();
-        expect(mockGeoJSONInstance.addData).toHaveBeenCalled();
-        
-        const addedData = mockGeoJSONInstance.addData.mock.calls[0][0];
-        expect(addedData.features.length).toBe(1);
-        expect(addedData.features[0].properties.id).toBe(1);
-        
-        // Check if filteredLayerId is set (requires exposing it or checking its effect)
-        // This is an internal state. We can check its effect via clearSelection.
-        expect(Logger.info).toHaveBeenCalledWith(`Layer "${filterableLayer.id}" filtered by bounds.`);
-    });
-  });
-
-  describe('clearSelection', () => {
-     const filterableLayer = {
-      id: 'filterLayer1',
-      name: 'Filterable Layer',
-      data: {
-        type: 'FeatureCollection',
-        features: [ { type: 'Feature', geometry: { type: 'Point', coordinates: [1, 1] } } ],
-      },
-      visible: true,
-    };
-
-    it('restores original GeoJSON data to the filtered layer and clears drawLayer', async () => {
-      wrapper = mountComponent({ layers: [filterableLayer] });
-      await nextTick();
-
-      // Simulate filtering first
-      const mockBounds = L.latLngBounds(L.latLng(0,0), L.latLng(0,0)); // Filters out the point
-      const drawCreatedCallback = mockMapInstance.on.mock.calls.find(call => call[0] === L.Draw.Event.CREATED)[1];
-      const mockDrawnLayer = { getBounds: () => mockBounds };
-      drawCreatedCallback({ layer: mockDrawnLayer });
-      await nextTick();
-      
-      expect(mockGeoJSONInstance.addData.mock.calls[0][0].features.length).toBe(0); // Ensure it was filtered
-
-      // Now call clearSelection (e.g. by clicking the button)
-      const clearButton = wrapper.find('button[title="清除绘图"], button:not([disabled])'); // More robust selector
-      // Find the button that calls clearSelection. The second button in the template.
-      const buttons = wrapper.findAll('.toolbar button');
-      await buttons[1].trigger('click'); // Assuming second button is "清除绘图"
-      
-      expect(mockFeatureGroupInstance.clearLayers).toHaveBeenCalled(); // drawLayer.clearLayers()
-      
-      // Check that original data is restored
-      expect(mockGeoJSONInstance.clearLayers).toHaveBeenCalledTimes(2); // 1 for filter, 1 for clear
-      expect(mockGeoJSONInstance.addData).toHaveBeenCalledTimes(2); //    "          "
-      const restoredData = mockGeoJSONInstance.addData.mock.calls[1][0];
-      expect(restoredData.features.length).toBe(1); // Original feature restored
-      expect(Logger.info).toHaveBeenCalledWith(`Selection cleared, restored original data for layer "${filterableLayer.id}".`)
-    });
+    expect(VectorLayer).toHaveBeenCalledTimes(overlayConfig.length + 1); // +1 for drawLayer
+    expect(VectorSource).toHaveBeenCalledTimes(overlayConfig.length + 1); // +1 for drawSource
+    expect(GeoJSON).toHaveBeenCalledTimes(overlayConfig.length); // Called for each overlay
+    expect(global.fetch).toHaveBeenCalledWith('/data/test.geojson'); // For the dataUrl layer
+    expect(mockMapInstance.addLayer).toHaveBeenCalledTimes(2 + overlayConfig.length + 1); // 2 base + N overlay + 1 drawLayer
   });
   
-  describe('toggleSelection', () => {
-    it('enables draw rectangle on first call if Leaflet.Draw is available', async () => {
-        wrapper = mountComponent();
-        await nextTick();
+  it('toggles overlay layer visibility', async () => {
+    const overlayConfig = [
+      { id: 'toggleLayer', name: 'Toggle Me', geoJson: { type: 'FeatureCollection', features: [] }, visible: true }
+    ];
+    wrapper = mountComponent({ overlayLayersConfig: overlayConfig });
+    await nextTick(); // Mount
+    await nextTick(); // loadOverlayLayers
 
-        const toggleButton = wrapper.findAll('.toolbar button')[0];
-        await toggleButton.trigger('click');
+    // This relies on the VectorLayer mock being the one associated with 'toggleLayer'
+    // and that mapOverlayLayers in component gets this instance.
+    mockVectorLayerInstance.setVisible.mockClear(); // Clear previous calls from initialization
+    
+    const checkbox = wrapper.find('.overlay-item input[type="checkbox"]');
+    expect(checkbox.exists()).toBe(true);
 
-        expect(L.Draw.Rectangle).toHaveBeenCalledWith(mockMapInstance, expect.any(Object));
-        expect(mockDrawRectangleInstance.enable).toHaveBeenCalled();
-        expect(wrapper.vm.selecting).toBe(true); // Need to expose 'selecting' or test via button text
-    });
-
-    it('logs error if Leaflet.Draw.Rectangle is not available when enabling', async () => {
-        // Simulate L.Draw.Rectangle being undefined
-        const OriginalDraw = L.Draw;
-        L.Draw = { ...L.Draw, Rectangle: undefined }; // Temporarily break it
-
-        wrapper = mountComponent();
-        await nextTick();
-        
-        const toggleButton = wrapper.findAll('.toolbar button')[0];
-        await toggleButton.trigger('click');
-
-        expect(Logger.error).toHaveBeenCalledWith('Leaflet.Draw 未正确加载，无法开启框选');
-        expect(mockDrawRectangleInstance.enable).not.toHaveBeenCalled();
-        // expect(wrapper.vm.selecting).toBe(false); // Should be reset
-
-        L.Draw = OriginalDraw; // Restore
-    });
+    // Simulate unchecking (making it invisible)
+    // Note: $event.target.checked will be false
+    await checkbox.setChecked(false); // This sets $event.target.checked = false
+    await nextTick();
+    
+    expect(mockVectorLayerInstance.setVisible).toHaveBeenCalledWith(false);
   });
 
-  it('cleans up on unmount', async () => {
-    wrapper = mountComponent();
-    await nextTick(); // for onMounted
+  it('handles map click for popups', async () => {
+    const mockFeature = { get: vi.fn(prop => prop === 'name' ? 'Test Feature' : undefined) };
+    const mockPopupFn = (feature) => `Name: ${feature.get('name')}`;
+    const overlayConfig = [
+      { id: 'popupLayer', name: 'Popup Layer', geoJson: { type: 'FeatureCollection', features: [] }, visible: true, popup: mockPopupFn }
+    ];
+    
+    // Simulate that forEachFeatureAtPixel finds a feature
+    mockMapInstance.forEachFeatureAtPixel.mockImplementation((pixel, callback) => {
+      // Simulate finding one feature from our 'popupLayer'
+      // The layerInstance needs to have get('popupFunction')
+      const mockLayerInstanceWithPopup = { 
+          get: vi.fn(key => {
+              if (key === 'popupFunction') return mockPopupFn;
+              if (key === 'layerId') return 'popupLayer'; // Ensure it's not drawLayer
+              return undefined;
+          })
+      };
+      callback(mockFeature, mockLayerInstanceWithPopup);
+    });
 
+    wrapper = mountComponent({ overlayLayersConfig: overlayConfig });
+    await nextTick(); // Mount
+    await nextTick(); // loadOverlayLayers
+
+    // Simulate map click
+    const mapClickCallback = mockMapInstance.on.mock.calls.find(call => call[0] === 'singleclick')[1];
+    expect(mapClickCallback).toBeDefined();
+    
+    const mockEvent = { coordinate: [10, 20], pixel: [50,50] };
+    mapClickCallback(mockEvent);
+    await nextTick();
+
+    expect(mockMapInstance.forEachFeatureAtPixel).toHaveBeenCalledWith(mockEvent.pixel, expect.any(Function));
+    expect(mockOverlayInstance.setPosition).toHaveBeenCalledWith(mockEvent.coordinate);
+    // Check popup content (requires access to #popup-content innerHTML, harder with basic mount)
+  });
+
+  it('starts and stops drawing interaction', async () => {
+    wrapper = mountComponent();
+    await nextTick();
+
+    const startButton = wrapper.findAll('.selection-toolbar button').find(b => b.text().includes('Start Selection'));
+    await startButton.trigger('click');
+    await nextTick();
+
+    expect(Draw).toHaveBeenCalledTimes(1);
+    expect(mockMapInstance.addInteraction).toHaveBeenCalledWith(mockDrawInstance);
+    expect(wrapper.find('.selection-toolbar button').text()).toContain('Cancel Drawing'); // Button text changes
+
+    await startButton.trigger('click'); // Now it should be "Cancel Drawing"
+    await nextTick();
+    expect(mockMapInstance.removeInteraction).toHaveBeenCalledWith(mockDrawInstance);
+    expect(wrapper.find('.selection-toolbar button').text()).toContain('Start Selection');
+  });
+
+  it('emits selection data on drawend', async () => {
+    wrapper = mountComponent();
+    const emitted = wrapper.emitted();
+    await nextTick();
+
+    const startButton = wrapper.findAll('.selection-toolbar button').find(b => b.text().includes('Start Selection'));
+    await startButton.trigger('click'); // Enable drawing
+    
+    // Simulate drawend event
+    const drawEndCallback = mockDrawInstance.on.mock.calls.find(call => call[0] === 'drawend')[1];
+    const mockDrawEvent = { 
+      feature: { 
+        getGeometry: () => ({ 
+          getExtent: () => [0,0,10,10], // Mock extent
+          clone: vi.fn().mockReturnThis(),
+          transform: vi.fn().mockReturnThis(),
+        }) 
+      } 
+    };
+    drawEndCallback(mockDrawEvent);
+    await nextTick();
+
+    expect(emitted.selection).toBeTruthy();
+    expect(emitted.selection[0][0]).toEqual(expect.objectContaining({
+      extent: [0,0,10,10],
+      lonLatExtent: [0,0,10,10], // Passthrough mock for transformExtent
+      center: [5,5], // Calculated by mocked getCenter
+      area: 12345, // From mocked getArea
+    }));
+  });
+  
+  it('clears drawing and selection details', async () => {
+    wrapper = mountComponent();
+    const emitted = wrapper.emitted();
+    await nextTick();
+
+    // Start drawing and complete one to have something to clear
+    const startButton = wrapper.findAll('.selection-toolbar button').find(b => b.text().includes('Start Selection'));
+    await startButton.trigger('click');
+    const drawEndCallback = mockDrawInstance.on.mock.calls.find(call => call[0] === 'drawend')[1];
+     const mockDrawEvent = { 
+      feature: { getGeometry: () => ({ getExtent: () => [0,0,10,10], clone: vi.fn().mockReturnThis(), transform: vi.fn().mockReturnThis() }) } 
+    };
+    drawEndCallback(mockDrawEvent);
+    await nextTick(); // selection should be emitted
+
+    mockVectorSourceInstance.clear.mockClear(); // Clear previous calls to drawSource.clear()
+
+    const clearButton = wrapper.findAll('.selection-toolbar button').find(b => b.text().includes('Clear Selection'));
+    await clearButton.trigger('click');
+    await nextTick();
+
+    expect(mockVectorSourceInstance.clear).toHaveBeenCalledTimes(1); // drawSource.clear()
+    expect(emitted.selection.length).toBe(2); // Initial null (or undefined), then selection, then null
+    expect(emitted.selection[1][0]).toBeNull(); // Last emission should be null
+  });
+  
+  it('applies filter on drawend and clears filter on selection clear', async () => {
+    const filterableLayerConfig = [
+      { id: 'filterable', name: 'Filterable', geoJson: {type: 'FeatureCollection', features: []}, visible: true, style: vi.fn() }
+    ];
+    const mockLayerSource = { getFeatures: vi.fn(() => [{ getGeometry: vi.fn(() => ({ intersectsExtent: vi.fn(() => true) })), set: vi.fn() }]), changed: vi.fn() };
+    const mockFilterableLayer = { getSource: vi.fn(() => mockLayerSource), setVisible: vi.fn(), get: vi.fn(), set: vi.fn() };
+    
+    // Make VectorLayer return our specific mock for the filterable layer
+    vi.mocked(VectorLayer).mockImplementation((options) => {
+      if (options.source !== drawSource) { // Don't override drawLayer's mock
+        return mockFilterableLayer;
+      }
+      return { ...mockVectorLayerInstance, getSource: () => mockVectorSourceInstance }; // Default for drawLayer
+    });
+
+    wrapper = mountComponent({ overlayLayersConfig: filterableLayerConfig });
+    await nextTick(); // Mount & initial loadOverlayLayers
+    await nextTick(); // Ensure async parts of loadOverlayLayers complete
+    
+    // Simulate drawing
+    const startButton = wrapper.findAll('.selection-toolbar button').find(b => b.text().includes('Start Selection'));
+    await startButton.trigger('click');
+    const drawEndCallback = mockDrawInstance.on.mock.calls.find(call => call[0] === 'drawend')[1];
+    const mockDrawEvent = { 
+      feature: { getGeometry: () => ({ getExtent: () => [0,0,10,10], clone: vi.fn().mockReturnThis(), transform: vi.fn().mockReturnThis() }) } 
+    };
+    drawEndCallback(mockDrawEvent);
+    await nextTick();
+
+    expect(mockFilterableLayer.getSource).toHaveBeenCalled();
+    expect(mockLayerSource.getFeatures).toHaveBeenCalled();
+    expect(mockLayerSource.changed).toHaveBeenCalled();
+    expect(Logger.info).toHaveBeenCalledWith('Filter applied to layer: filterable');
+
+    // Simulate clearing selection
+    mockLayerSource.changed.mockClear(); // Reset for next assertion
+    const clearButton = wrapper.findAll('.selection-toolbar button').find(b => b.text().includes('Clear Selection'));
+    await clearButton.trigger('click');
+    await nextTick();
+
+    expect(mockLayerSource.changed).toHaveBeenCalled(); // Filter cleared, source changed
+    expect(Logger.info).toHaveBeenCalledWith('Filter cleared from layer: filterable');
+  });
+
+  it('cleans up map on unmount', async () => {
+    wrapper = mountComponent();
+    await nextTick();
+    
     wrapper.unmount();
-    expect(mockMapInstance.remove).toHaveBeenCalled();
-    expect(Logger.info).toHaveBeenCalledWith('地图销毁');
+    
+    expect(mockMapInstance.setTarget).toHaveBeenCalledWith(null);
+    expect(Logger.info).toHaveBeenCalledWith('OpenLayers map disposed');
   });
 
 });

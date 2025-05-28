@@ -1,163 +1,200 @@
 <template>
   <div>
     <GisMap
-      :center="[39.9, 116.4]"
-      :zoom="10"
-      :layers="mapLayers"
-      @selection="handleSelection"
+      :center="[116.4, 39.9]" <!-- Initial map center: Beijing -->
+      :zoom="5" <!-- Initial map zoom level -->
+      :overlayLayersConfig="overlayLayersConfig"
+      @selection="handleSelection" <!-- Listen for selection events from GisMap -->
     />
-    <div v-if="bounds" class="selection-details">
-      <h4>Selection Details:</h4>
-      <p>Center: Lat: {{ bounds.center.lat.toFixed(4) }}, Lng: {{ bounds.center.lng.toFixed(4) }}</p>
-      <p>Area: {{ bounds.area.toFixed(2) }} sq km</p>
-      <p>Bounds:</p>
-      <ul>
-        <li>North-East: Lat: {{ bounds.northEast.lat.toFixed(4) }}, Lng: {{ bounds.northEast.lng.toFixed(4) }}</li>
-        <li>South-West: Lat: {{ bounds.southWest.lat.toFixed(4) }}, Lng: {{ bounds.southWest.lng.toFixed(4) }}</li>
-      </ul>
+    <div v-if="currentSelectionDetails" class="selection-details">
+      <h4>Selection Details (from Circle's Extent):</h4>
+      <p>Extent (Lon/Lat): 
+        SW: {{ currentSelectionDetails.lonLatExtent[0].toFixed(4) }}, {{ currentSelectionDetails.lonLatExtent[1].toFixed(4) }} | 
+        NE: {{ currentSelectionDetails.lonLatExtent[2].toFixed(4) }}, {{ currentSelectionDetails.lonLatExtent[3].toFixed(4) }}
+      </p>
+      <p>Center (Map Projection): {{ currentSelectionDetails.center[0].toFixed(2) }}, {{ currentSelectionDetails.center[1].toFixed(2) }}</p>
+      <p>Center (Lon/Lat): {{ currentSelectionDetails.lonLatCenter[0].toFixed(4) }}, {{ currentSelectionDetails.lonLatCenter[1].toFixed(4) }}</p>
+      <p>Circle Area: {{ (currentSelectionDetails.area / 1000000).toFixed(2) }} km²</p> 
+      <!-- Area is provided in m², converted to km² for display -->
     </div>
-    <div v-else>
-      <p>No selection made yet. Click "开启框选" and draw a rectangle on the map.</p>
+    <div v-else class="selection-prompt">
+      <p>No selection made. Click "Start Selection" in the map toolbar and draw a circle on the map.</p>
     </div>
   </div>
 </template>
 
 <script setup>
-import GisMap from '@/components/GisMap.vue'
-import { ref, onMounted } from 'vue' // Import onMounted
-import L from 'leaflet' // Import Leaflet
+import GisMap from '@/components/GisMap.vue';
+import { ref, onMounted } from 'vue';
+// OpenLayers style imports for defining layer styles
+import { Style, Circle as CircleStyle, Fill, Stroke } from 'ol/style';
+import { transform } from 'ol/proj'; // For transforming coordinates (e.g., selection center)
 
-const mapLayers = ref([
+// Base style for the "Beijing Points" layer, reused in its style function
+const beijingLayerBaseStyle = new Style({
+  image: new CircleStyle({
+    radius: 7,
+    fill: new Fill({ color: 'blue' }),
+    stroke: new Stroke({ color: 'white', width: 2 }),
+  }),
+});
+
+// Reactive array holding configurations for overlay layers passed to GisMap component
+const overlayLayersConfig = ref([
   {
     id: 'beijing_layer',
-    name: 'Beijing Points',
-    data: {
+    name: 'Beijing Points (Static & Filterable)',
+    geoJson: { // Direct GeoJSON data for this layer
       type: 'FeatureCollection',
       features: [
         {
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [116.4, 39.9] },
-          properties: { name: 'Beijing Center' },
+          properties: { name: 'Beijing Center', type: 'City Capital' },
         },
         {
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [116.41, 39.91] },
-          properties: { name: 'Near Beijing Center' },
+          properties: { name: 'Near Beijing Center', type: 'Suburb' },
         },
+        { 
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [100.0, 35.0] }, // Point for filter testing
+          properties: { name: 'Far Point', type: 'Remote' },
+        }
       ],
     },
-    visible: true,
+    visible: true, // Initially visible
+    // Style function: Hides features if '_hidden_by_filter' property is true
+    style: function(feature) {
+      if (feature.get('_hidden_by_filter')) {
+        return null; // Do not render the feature
+      }
+      return beijingLayerBaseStyle; // Apply base style otherwise
+    },
+    // Popup function: Returns HTML content for a feature's popup
+    popup: (feature) => `<strong>${feature.get('name')}</strong><br>Type: ${feature.get('type')}`,
   },
   {
     id: 'shanghai_layer',
-    name: 'Shanghai Point (Initially Hidden)',
-    data: {
+    name: 'Shanghai Point (Static, Initially Hidden)',
+    geoJson: {
       type: 'FeatureCollection',
       features: [
         {
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [121.47, 31.23] },
-          properties: { name: 'Shanghai Center' },
+          properties: { name: 'Shanghai Center', population: '24 million' },
         },
       ],
     },
-    visible: false, // Initially not visible
+    visible: false, // Initially hidden
+    style: new Style({ // Direct style object as this layer is not filterable by current logic
+      image: new CircleStyle({
+        radius: 8,
+        fill: new Fill({ color: 'red' }),
+        stroke: new Stroke({ color: 'black', width: 1 }),
+      }),
+    }),
+    popup: (feature) => `City: ${feature.get('name')}<br>Population: ${feature.get('population')}`,
   },
   {
     id: 'dummy_line_layer',
-    name: 'Dummy Line',
-    data: {
+    name: 'Sample Line (Static)',
+    geoJson: {
         type: 'FeatureCollection',
         features: [
             {
                 type: 'Feature',
                 geometry: {
                     type: 'LineString',
-                    coordinates: [
-                        [110, 35], [115, 38], [120, 35]
-                    ]
+                    coordinates: [ [110, 35], [115, 38], [120, 35] ]
                 },
-                properties: { name: 'A Sample Line' }
+                properties: { name: 'A Sample Line', length: 'approx 1000km' }
             }
         ]
     },
     visible: true,
+    style: new Style({ // Direct style object
+      stroke: new Stroke({
+        color: 'green',
+        width: 3,
+      }),
+    }),
+    popup: (feature) => `Line: ${feature.get('name')}<br>Length: ${feature.get('length')}`,
   }
-])
+]);
 
-const bounds = ref(null)
+// Reactive ref to store details of the current map selection
+const currentSelectionDetails = ref(null);
 
-// onMounted hook to fetch and add the placenames layer
+// Lifecycle hook: Fetches additional GeoJSON data when the component is mounted
 onMounted(async () => {
   try {
-    const response = await fetch('/data/placenames.geojson')
+    const response = await fetch('/data/placenames.geojson'); // Assumes file is in public/data
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const fetchedGeoJsonData = await response.json()
+    const fetchedGeoJsonData = await response.json();
 
-    const placenamesLayer = {
-      id: 'placenames_layer',
-      name: 'Place Names (Fetched)',
-      data: fetchedGeoJsonData,
+    // Configuration for the dynamically fetched "Place Names" layer
+    const placenamesLayerConfig = {
+      id: 'placenames_layer_dynamic',
+      name: 'Place Names (Dynamic)',
+      geoJson: fetchedGeoJsonData, // Data used by GisMap to create VectorSource
       visible: true,
-      options: {
-        pointToLayer: function (feature, latlng) {
-          // Ensure feature and properties exist
-          const name = feature && feature.properties && feature.properties.name 
-            ? feature.properties.name 
-            : 'Unnamed place';
-          return L.marker(latlng).bindPopup(name);
-        }
+      style: new Style({ // Style for these dynamic points
+        image: new CircleStyle({
+          radius: 6,
+          fill: new Fill({ color: 'rgba(255, 165, 0, 0.7)' }), // Orange, semi-transparent
+          stroke: new Stroke({ color: 'white', width: 1.5 }),
+        }),
+      }),
+      popup: (feature) => { // Popup function for dynamic points
+        const name = feature.get('name') || 'Unnamed place';
+        return `<strong>${name}</strong>`;
       }
-    }
-    mapLayers.value.push(placenamesLayer)
-    console.log('Place Names layer fetched and added successfully.')
+    };
+    overlayLayersConfig.value.push(placenamesLayerConfig); // Add to the list of layers for GisMap
+    console.log('Place Names layer (dynamic) fetched and added to config.');
   } catch (error) {
-    console.error('Error fetching or processing placenames.geojson:', error)
+    console.error('Error fetching or processing placenames.geojson for dynamic layer:', error);
   }
-})
+});
 
-function handleSelection(latLngBounds) {
-  const northEast = latLngBounds.getNorthEast()
-  const southWest = latLngBounds.getSouthWest()
-  const center = latLngBounds.getCenter()
-
-  // Calculate area in square kilometers
-  // Leaflet's getArea() is not available on L.LatLngBounds directly.
-  // A common way is to convert bounds to a polygon and then calculate its area.
-  // However, for a simple rectangle, we can calculate it manually or use a helper.
-  // For simplicity, I'll approximate using a rough conversion based on latitude.
-  // More accurate methods might involve L.GeometryUtil.geodesicArea or projecting.
-  
-  // Rough approximation of area:
-  const earthRadiusKm = 6371
-  const lat1 = southWest.lat * Math.PI / 180
-  const lat2 = northEast.lat * Math.PI / 180
-  const deltaLng = (northEast.lng - southWest.lng) * Math.PI / 180
-  
-  // Average latitude for width calculation
-  const avgLat = (lat1 + lat2) / 2
-  
-  // Width and height in km
-  const width = Math.abs(deltaLng * earthRadiusKm * Math.cos(avgLat))
-  const height = Math.abs((lat2 - lat1) * earthRadiusKm)
-  const area = width * height // Area in sq km
-
-  bounds.value = {
-    northEast: { lat: northEast.lat, lng: northEast.lng },
-    southWest: { lat: southWest.lat, lng: southWest.lng },
-    center: { lat: center.lat, lng: center.lng },
-    area: area,
+// Handler for the 'selection' event emitted by GisMap
+function handleSelection(selectionData) {
+  if (selectionData) {
+    // Transform center from map projection (EPSG:3857) to Lon/Lat (EPSG:4326) for display
+    const lonLatCenter = transform(selectionData.center, 'EPSG:3857', 'EPSG:4326');
+    currentSelectionDetails.value = {
+      ...selectionData,
+      lonLatCenter: lonLatCenter, // Add transformed center to the details
+    };
+    console.log('Selection received in parent:', currentSelectionDetails.value);
+  } else {
+    currentSelectionDetails.value = null; // Clear details if selection is cleared
+    console.log('Selection cleared in parent.');
   }
 }
+
 </script>
 
 <style scoped>
-.selection-details {
+.selection-details, .selection-prompt {
   margin-top: 16px;
   padding: 16px;
   border: 1px solid #ccc;
   border-radius: 4px;
+  background-color: #f9f9f9;
+}
+.selection-prompt p {
+  margin: 0;
+  color: #555;
+}
+/* Ensure the root div of this view component allows GisMap to take full space if needed */
+div {
+  width: 100%;
+  height: 100%; 
 }
 </style>
