@@ -41,7 +41,7 @@
 
 <script setup>
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue';
-import { Logger } from '@/utils/logger';
+import { Logger } from '@/utils/logger'; // Logger is already imported
 import { GISLoadError } from '@/utils/errors';
 
 // OpenLayers imports
@@ -128,9 +128,28 @@ const toggleOverlayLayer = (layerId, isVisible) => {
 // Loads or reloads overlay layers based on props.overlayLayersConfig
 const loadOverlayLayers = async () => {
   if (!olMap) return;
-  // Clear existing overlay layers from map and internal store
-  mapOverlayLayers.value.forEach(layer => olMap.removeLayer(layer));
-  mapOverlayLayers.value.clear();
+
+  // Defensive checks and cleanup for existing overlay layers
+  if (mapOverlayLayers.value && typeof mapOverlayLayers.value.forEach === 'function' && typeof mapOverlayLayers.value.clear === 'function') {
+    // It appears to be a Map-like object, proceed with cleanup
+    mapOverlayLayers.value.forEach(layer => {
+      if (olMap && typeof olMap.getLayers === 'function' && olMap.getLayers().getArray().includes(layer)) { 
+        olMap.removeLayer(layer);
+      }
+    });
+    mapOverlayLayers.value.clear();
+    Logger.debug('[GisMap.vue] Cleared existing overlay layers from map and local cache.');
+  } else if (mapOverlayLayers.value) {
+    // It exists, but it's not what we expect (not a Map)
+    Logger.error(`[GisMap.vue] loadOverlayLayers: mapOverlayLayers.value is not a Map object as expected. Type: ${typeof mapOverlayLayers.value}. Value:`, mapOverlayLayers.value);
+    // Reset it to ensure subsequent .set operations don't fail.
+    mapOverlayLayers.value = new Map(); 
+    Logger.warn('[GisMap.vue] loadOverlayLayers: Reset mapOverlayLayers.value to a new Map due to unexpected type.');
+  } else {
+    // mapOverlayLayers.value is null or undefined, which is unexpected after initialization.
+    Logger.warn('[GisMap.vue] loadOverlayLayers: mapOverlayLayers.value is null or undefined. Initializing as new Map.');
+    mapOverlayLayers.value = new Map();
+  }
   // Note: overlayVisibilityState is intentionally not cleared to maintain user preferences across reloads.
 
   for (const config of props.overlayLayersConfig) {
@@ -157,7 +176,7 @@ const loadOverlayLayers = async () => {
       vectorLayer.set('popupFunction', config.popup); // Store popup function for click events
       
       olMap.addLayer(vectorLayer);
-      mapOverlayLayers.value.set(config.id, vectorLayer);
+      mapOverlayLayers.value.set(config.id, vectorLayer); // This line requires mapOverlayLayers.value to be a Map
       // Initialize visibility state if it's not already set (e.g., first load)
       if (overlayVisibilityState.value.get(config.id) === undefined) {
         overlayVisibilityState.value.set(config.id, config.visible !== false);
@@ -177,7 +196,7 @@ const closePopup = () => {
 // Applies a filter to the specified layer based on the selection extent.
 // Features outside the extent will have a '_hidden_by_filter' property set to true.
 const applyFilterToLayer = (layerId, selectionExtent) => {
-  const layer = mapOverlayLayers.value.get(layerId);
+  const layer = mapOverlayLayers.value.get(layerId); // Requires mapOverlayLayers.value to be a Map
   if (!layer) { Logger.warn(`Filter target layer ${layerId} not found.`); return; }
   const source = layer.getSource();
   if (!source || typeof source.getFeatures !== 'function') { Logger.warn(`Source for layer ${layerId} is not a VectorSource.`); return; }
@@ -196,7 +215,7 @@ const applyFilterToLayer = (layerId, selectionExtent) => {
 // Clears any active filter from the specified layer.
 const clearFilterFromLayer = (layerId) => {
   if (!layerId) return;
-  const layer = mapOverlayLayers.value.get(layerId);
+  const layer = mapOverlayLayers.value.get(layerId); // Requires mapOverlayLayers.value to be a Map
   if (!layer) { Logger.warn(`Filter clear target layer ${layerId} not found.`); return; }
   const source = layer.getSource();
   if (!source || typeof source.getFeatures !== 'function') { Logger.warn(`Source for layer ${layerId} for clearing filter is not a VectorSource.`); return; }
@@ -369,8 +388,8 @@ onBeforeUnmount(() => {
     olMap = null;
     // Clear reactive refs
     mapBaseLayers.value = [];
-    mapOverlayLayers.value.clear();
-    overlayVisibilityState.value.clear();
+    mapOverlayLayers.value.clear(); // Requires mapOverlayLayers.value to be a Map
+    overlayVisibilityState.value.clear(); // Also a Map
     Logger.info('OpenLayers map disposed');
   }
 });
